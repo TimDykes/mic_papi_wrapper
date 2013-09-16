@@ -12,14 +12,25 @@ TARGET = mic_demo
 OMP = -fopenmp
 #OMP = 
 
+# Do not vectorize (host + offload)
+#NOVEC = -no-vec
+NOVEC =
+
+# Report on vectorization (offload)
+VECREP = -vec-report2
+#VECREP = 
+
 # General compiler flags
-OPTS = -Wall -O2 $(OMP)
+OPTS = -Wall -O2 $(OMP) $(NOVEC)
 
 # Mic offload compiler flags
-MIC_OFFLOAD_OPTS = -offload-option,mic,compiler," $(OMP) -Wall -O2 -lpwp -L. -z defs"
+MIC_OFFLOAD_OPTS = -offload-option,mic,compiler," $(OMP) -Wall -O2 -lpwp -L. -z defs $(NOVEC) $(VECREP)"
 
 # Mic native compiler flags
 MIC_NATIVE_OPTS = -mmic $(OMP) -fPIC -shared -lpapi -lpfm -L/users/dykest/Programs/papi
+
+# Use SOA or AOS
+OPTS += -DUSE_SOA
 
 # Objects to be built
 OBJS = main.o

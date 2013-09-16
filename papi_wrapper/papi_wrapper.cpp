@@ -95,9 +95,9 @@ void PapiWrapper::init()
         fflush(0);
     }
 
-    if(numEvents_ > 127)
+    if(numEvents_ > num_hwcntrs)
     {
-        printf("Too many events: %d\nExiting.", numEvents_);
+        printf("%d events requested but only %d hardware counters available.\nExiting.", numEvents_, num_hwcntrs);
         exit(1);
     } 
 
@@ -123,6 +123,11 @@ void PapiWrapper::init()
 void PapiWrapper::setDebug(bool onoff)
 {
     debug_ = onoff;
+}
+
+void PapiWrapper::setVerboseDebug(bool onoff)
+{
+    verbose_debug_ = onoff;
 }
 
 void PapiWrapper::startRecording(std::string key)
@@ -205,7 +210,15 @@ void PapiWrapper::printRecord(std::string key)
                 // Print counts   
                 for(unsigned k = 0; k < numThreads_; k++)
                     printf("Count: %14lld | ", records_[i][k][j]);
-                printf("\n");            
+                printf("\n");
+
+                // For multiple openmp threads print cumulative total
+                if(numThreads_>1){
+                    int total = 0;
+                    for(unsigned k = 0; k < numThreads_; k++)
+                        total += records_[i][k][j];
+                    printf("Accumulative total from %d threads: %d\n", numThreads_, total);
+                }
             }
         // Print time
         for(unsigned k = 0; k < numThreads_; k++)           
@@ -250,9 +263,19 @@ void PapiWrapper::startCounters()
     #pragma omp parallel
     {
         if(numEvents_){
+                #ifdef _OPENMP
+                        int tid = omp_get_thread_num();
+                #else
+                        int tid = 0;
+                #endif
             int papi_error = PAPI_start_counters(&eventIds_[0], eventIds_.size());
             if (papi_error != PAPI_OK){
-                printf("Could not start counters\n");
+                printf("Thread %d: Could not start counters\n", tid);
+                if(verbose_debug_){
+                    for(unsigned i = 0; i < eventIds_.size(); i++)
+                        printf("EventID %d out of %d: 0x%X\n",i, eventIds_.size(), eventIds_[i]);
+                    fflush(0);
+                }
                 papiPrintError(papi_error);
                 exit(-1);
             }

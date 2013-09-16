@@ -1,6 +1,6 @@
 /*
     Simple wrapper for PAPI, based on Ben Cummings' papi-wrap 
-    Rewritten to allow running on Intel MIC, in offload or native modes
+    Updated and modified for easy offloading to Intel MIC by Tim Dykes
 	timothy.dykes@myport.ac.uk
 */
 
@@ -15,11 +15,10 @@
 #include <omp.h>
 #include </users/dykest/Programs/papi/papi.h>
 
-// Rudimentary array class as cannot use std::vector in offload code
+// TODO: mm_malloc to 64 instead of new
 template<typename T>
 class Array_T{
 public:
-	// TODO: mm_malloc to 64 instead of new
 	Array_T() { arr_ = NULL; size_ = 0; }
 	Array_T(int i) { arr_ = new T[i]; size_ = i; } 
 	~Array_T() { if(arr_ != NULL) delete[] arr_; }
@@ -65,8 +64,6 @@ private:
 	unsigned size_;
 };
 
-
-// Record class to store recording of counters for section of code
 class Record{
 public:
 	Record() {}
@@ -89,14 +86,14 @@ private:
 	Array_T<double> time_;
 };
 
-// Wrapper for PAPI
 class PapiWrapper{
 public:
-	PapiWrapper() { setup_ = false; numEvents_ = 0; numThreads_ = 1; debug_ = false;  counting_=false;}
+	PapiWrapper() { setup_ = false; numEvents_ = 0; numThreads_ = 1; debug_ = false; verbose_debug_ = false; counting_=false;}
 	~PapiWrapper() {}
 
 	void init();
 	void setDebug(bool);
+	void setVerboseDebug(bool);
 	void startRecording(std::string);
 	void stopRecording();
 	void printRecord(std::string);
@@ -114,6 +111,7 @@ private:
 	Record* currentRecord_;
 	bool setup_;
 	bool debug_;
+	bool verbose_debug_;
 	bool counting_;
 	int numThreads_;
 	int numEvents_;
