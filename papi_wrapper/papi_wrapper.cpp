@@ -227,6 +227,15 @@ void PapiWrapper::printRecord(std::string key)
         for(unsigned k = 0; k < numThreads_; k++)
             printf("Time: %15f | ", records_[i].time()[k]);
         printf("\n");    
+
+        // For multiple openmp threads print average time
+        if(numThreads_>1){
+            double total = 0;
+            for(unsigned k = 0; k < numThreads_; k++)
+                total += records_[i].time()[k];
+            printf("Average time from %d threads: %f\n", numThreads_, total/(double)numThreads_);
+        }   
+        
         found = true;
         }
     }
