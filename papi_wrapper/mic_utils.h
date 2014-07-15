@@ -8,3 +8,14 @@
 #define EVT_TARGET_MIC
 #endif
 
+#ifndef MIC_PSIM
+#define MIC_PSIM
+
+#pragma offload_attribute(push, target(mic))
+
+#include <omp.h>
+
+#pragma offload_attribute(pop)
+
+
+#endif

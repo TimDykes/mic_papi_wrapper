@@ -1,15 +1,7 @@
 #include "papi_wrapper.h"
 
 void PapiWrapper::init()
-{
-    // Get user defined events
-    char* papi_counters = getenv("PAPI_EVENTS");
-    if(papi_counters == NULL) {
-        printf("PAPI_EVENTS environment variable not set, PAPI will not be initialised\n");
-        fflush(0);
-        return;        
-    }
-
+{  
 	if(setup_) {
 		printf("Cannot call init when PAPI is already initialised\n");
 		exit(1);
@@ -17,7 +9,7 @@ void PapiWrapper::init()
     
     int papi_error;
     
-    // Init PAPI library
+    // Init library
     papi_error = PAPI_library_init(PAPI_VER_CURRENT);
     if (papi_error != PAPI_VER_CURRENT) {
         printf("PAPI library init error!\n");
@@ -45,7 +37,16 @@ void PapiWrapper::init()
         exit(1);
     }
 
-    // Check how many events we should be counting
+
+    // Get user defined events
+    char* papi_counters = getenv("PAPI_EVENTS");
+    if(papi_counters == NULL) {
+        printf("PAPI_EVENTS environment variable not set, PAPI not initialised, running in time only mode\n");
+        timeOnly_ = true;
+        fflush(0);
+        return;        
+    }
+    numEvents_ = 0;
     char* result = NULL;
     char  delim[] = "|";
     char* temp = strdup(papi_counters);
@@ -56,33 +57,14 @@ void PapiWrapper::init()
         result = strtok( NULL, delim);
     }
 
+    // Allocate memory and store event names/IDs
     if(numEvents_ < 1) {
-        printf("No PAPI events set, PAPI will not record any events\n");
+        printf("No PAPI events set, PAPI not initialised, running in time only mode\n");
         fflush(0);
+        timeOnly_ = true;
         return;
     }
 
-    // Create PAPI event set (one per thread)
-    eventSets_.resize(numThreads_);
-
-    #pragma omp parallel
-    {
-        #ifdef _OPENMP
-        int tid = omp_get_thread_num();
-        #else
-        int tid = 0;
-        #endif
-        eventSets_[tid] = PAPI_NULL;
-        papi_error = PAPI_create_eventset(&eventSets_[tid]);
-
-        if(papi_error != PAPI_OK) {
-            printf("Thread %d: Could not create event set\n", tid);
-            papiPrintError(papi_error);
-            exit(-1);
-        }
-    }
-
-    // Extract events from user defined list and add them to event sets for each thread
     eventNames_.resize(numEvents_);
     eventIds_.resize(numEvents_);
     result = NULL;
@@ -94,46 +76,41 @@ void PapiWrapper::init()
         papi_error = PAPI_event_name_to_code(result, &eventID);
 
         if(papi_error==PAPI_OK) {
-            #pragma omp parallel
-            {
-                #ifdef _OPENMP
-                int tid = omp_get_thread_num();
-                #else
-                int tid = 0;
-                #endif
-                papi_error = PAPI_add_event(eventSets_[tid], eventID);
-                if(papi_error == PAPI_OK){
-                    if(tid == 0){
-                        eventNames_[ctr] = std::string(result);
-                        eventIds_[ctr] = eventID;
-                        ctr++;
-                    }
-                }
-                else{
-                    printf("Thread %d: Unable to add event %s to event list. This event will not be recorded.\n", tid,result);
-                    papiPrintError(papi_error);
-                }   
-            }
+
+           eventNames_[ctr] = result;
+           eventIds_[ctr] = eventID;
+           ctr++;
         }
         else {
-           printf("Unable to obtain code for event name: %s This event will not be recorded.\n", result);
+           printf("Unable to obtain code for event name: %s\n", result);
            papiPrintError(papi_error);
+           exit(1);
         }
 
         result = strtok( NULL, delim );
     }
 
-    // Adjust for any events that were requested but will not be recorded
-    numEvents_ = ctr;
-    eventNames_.resize(numEvents_);
-    eventIds_.resize(numEvents_);
-
-    // Print some debug info
     if(debug_) {
         printf("Hardware Counters: %d\nThreads: %d\nEvents: %d\n", num_hwcntrs, numThreads_, numEvents_);
         for(unsigned i = 0; i < numEvents_; i++)
-            printf("Event %d out of %d: %s\n",i,numEvents_,eventNames_[i].c_str());
+            printf("Event %d out of %d: %s\n",i,numEvents_,eventNames_[i]);
         fflush(0);
+    }
+
+    if(numEvents_ > num_hwcntrs)
+    {
+        printf("%d events requested but only %d hardware counters available.\nExiting.", numEvents_, num_hwcntrs);
+        exit(1);
+    } 
+
+    // Create PAPI event set
+    eventSet_ = PAPI_NULL;
+    papi_error = PAPI_create_eventset(&eventSet_);
+
+    if(papi_error != PAPI_OK) {
+        printf("Could not create event set\n");
+        papiPrintError(papi_error);
+        exit(-1);
     }
 
     // Allocate memory for counters, nthread elements each containing nevent elements
@@ -155,127 +132,263 @@ void PapiWrapper::setVerboseDebug(bool onoff)
     verbose_debug_ = onoff;
 }
 
-void PapiWrapper::startRecording(std::string key)
+void PapiWrapper::startRecording(unsigned key)
 {
-    if(setup_){
-
-        Array_T<double> sTime;
-        sTime.resize(numThreads_);
+    bool unique = true;
+    for(int i = 0; i < uniqueKeys_.size(); i++){
+        if(key == uniqueKeys_[i])
+            unique = false;
+    }
+    if(unique)
+        uniqueKeys_.push_back(key);
+  
+    Record newRecord __attribute__((aligned(64)));
+    newRecord.Init(key, numThreads_, numEvents_);
+    records_.push_back(newRecord);
+    sTime_.resize(numThreads_);
+    currentRecord_++;
 
 #ifdef _OPENMP
         #pragma omp parallel
         {
             int tid = omp_get_thread_num();
-            sTime[tid] = -(omp_get_wtime());
+            //records_[currentRecord_].time()[tid] = -(omp_get_wtime());
+            sTime_[tid]= -(omp_get_wtime());
         }
 #else
         struct timeval t;
         gettimeofday(&t, NULL);
-        sTime[0] =  -(t.tv_sec + 1e-6*t.tv_usec);
+        //records_[currentRecord_].time()[0] =  -(t.tv_sec + 1e-6*t.tv_usec);
+        sTime_[0] =  -(t.tv_sec + 1e-6*t.tv_usec);
 #endif
 
-    currentRecord_ = new Record(key, numThreads_, numEvents_, sTime);
-    startCounters();
-    }
+    if(!timeOnly_)
+        startCounters();
+    else
+        counting_ = true;
 }
 
 void PapiWrapper::stopRecording()
 {
-    if(counting_){
-        stopCounters();
+    if(!counting_) {
+        printf("Cannot stop counter/timer when not counting/timing...\n");
+        fflush(0);
+        exit(1);
+    }
 
-        Array_T<double> sTime;
-        sTime.resize(numThreads_);
+    if(!timeOnly_)
+        stopCounters();
 
 #ifdef _OPENMP
         #pragma omp parallel
         {
             int tid = omp_get_thread_num();
-            sTime[tid] = omp_get_wtime();
+            //records_[currentRecord_].time()[tid] += omp_get_wtime();
+            sTime_[tid] += omp_get_wtime();
         }
 #else
         struct timeval t;
         gettimeofday(&t, NULL);
-        sTime[0] =  (t.tv_sec + 1e-6*t.tv_usec);
+       // records_[currentRecord_].time()[0] =  (t.tv_sec + 1e-6*t.tv_usec);
+        sTime_[0] =  (t.tv_sec + 1e-6*t.tv_usec);
 #endif
 
     for(unsigned i = 0; i < numThreads_; i++){
-        for(unsigned j = 0; j < numEvents_; j++)
-           (*currentRecord_)[i][j] = counters_[i][j];  
-         (*currentRecord_).time()[i] += sTime[i];    
-    }
-
-
-    records_.push_back(*currentRecord_);
-
-    delete currentRecord_;
+        if(!timeOnly_){
+            for(unsigned j = 0; j < numEvents_; j++)
+               records_[currentRecord_][i][j] = counters_[i][j];  
+        } 
+        records_[currentRecord_].time()[i] = sTime_[i];
     }
 }
 
-void PapiWrapper::printRecord(std::string key)
+
+
+void PapiWrapper::printRecord(unsigned key)
 {
-    if(setup_){
-        if(records_.size() == 0){
-            printf("Cannot print record when no recordings have been made");
-            fflush(0);
-            exit(1);
-        }
+    if(records_.size() == 0){
+        printf("Cannot print record when no recordings have been made");
+        fflush(0);
+        exit(1);
+    }
 
-        bool found = false;
-        for(unsigned i = 0; i < records_.size(); i++) {
-            if(records_[i].name() == key){
-                for(unsigned j = 0; j < numEvents_; j++) {
-                    // Print event name
-                    unsigned strSize = eventNames_[i].length();
-                    std::string format;
-                    for(unsigned k = 0; k < strSize+4; k++)
-                        format += "-";
-                    printf("%s\n| %s |\n%s\n",format.c_str(),eventNames_[j].c_str(),format.c_str());
+    bool found = false;
+    for(unsigned i = 0; i < records_.size(); i++) {
+        if(records_[i].rID() == key){
+            printf("------------------------\nFor KEY ID %d\n------------------------\n", key);
+            for(unsigned j = 0; j < numEvents_; j++) {
+                // Print event name
+                // unsigned strSize = eventNames_[i].length();
+                // std::string format;
+                // for(unsigned k = 0; k < strSize+4; k++)
+                //     format += "-";
+                printf("Event: %s: \n",eventNames_[j]);
 
-                    // Print thread IDs
-                    for(unsigned k = 0; k < numThreads_; k++)
-                        printf("Thread ID: %10d | ",k);
-                    printf("\n");
-
-                    // Print counts   
-                    for(unsigned k = 0; k < numThreads_; k++)
-                        printf("Count: %14lld | ", records_[i][k][j]);
-                    printf("\n");
-
-                    // For multiple openmp threads print cumulative total
-                    if(numThreads_>1){
-                        int total = 0;
-                        for(unsigned k = 0; k < numThreads_; k++)
-                            total += records_[i][k][j];
-                        printf("Accumulative total from %d threads: %d\n", numThreads_, total);
-                    }
-                }
-            // Print time
-            for(unsigned k = 0; k < numThreads_; k++)           
-                printf("------------------------");
-            printf("\n");
-            for(unsigned k = 0; k < numThreads_; k++)
-                printf("Time: %15f | ", records_[i].time()[k]);
-            printf("\n"); 
-
-            // For multiple openmp threads print average time
-            if(numThreads_>1){
-                double total = 0;
+                // Print thread IDs
                 for(unsigned k = 0; k < numThreads_; k++)
-                    total += records_[i].time()[k];
-                printf("Average time from %d threads: %f\n", numThreads_, total/(double)numThreads_);
-            }                
-            found = true;
+                    printf("Thread ID: %10d | ",k);
+                printf("\n");
+
+                // Print counts   
+                for(unsigned k = 0; k < numThreads_; k++)
+                    printf("Count: %14lld | ", records_[i][k][j]);
+                printf("\n");
+
+                // For multiple openmp threads print cumulative total
+                if(numThreads_>1){
+                    long long total = 0;
+                    for(unsigned k = 0; k < numThreads_; k++)
+                        total += records_[i][k][j];
+                    printf("Accumulative total from %d threads: %lld\n", numThreads_, total);
+                }
+            }
+        // Print time
+        for(unsigned k = 0; k < numThreads_; k++)           
+            printf("------------------------");
+        printf("\n");
+        for(unsigned k = 0; k < numThreads_; k++)
+            printf("Time: %15f | ", records_[i].time()[k]);
+        printf("\n");    
+
+        // For multiple openmp threads print average time
+        if(numThreads_>1){
+            double total = 0;
+            for(unsigned k = 0; k < numThreads_; k++)
+                total += records_[i].time()[k];
+            printf("Average time from %d threads: %f\n", numThreads_, total/(double)numThreads_);
+        }   
+        
+        found = true;
+        }
+    }
+
+    if(!found){
+        printf("Record with key: %u not found in records list.\n", key);
+        fflush(0);
+    }
+}
+
+void PapiWrapper::printAllRecords()
+{
+    if(records_.size() == 0){
+        printf("printAllRecords(): No records made \n");
+        fflush(0);
+    }
+
+    for(unsigned i = 0; i < records_.size(); i++) {
+        printf("------------------------\nFor KEY ID %d\n------------------------\n", records_[i].rID());
+        for(unsigned j = 0; j < numEvents_; j++) {
+            // Print event name
+            // unsigned strSize = eventNames_[i].length();
+            // std::string format;
+            // for(unsigned k = 0; k < strSize+4; k++)
+            //     format += "-";
+            printf("Event: %s: \n",eventNames_[j]);
+
+            // Print thread IDs
+            for(unsigned k = 0; k < numThreads_; k++)
+                printf("Thread ID: %10d | ",k);
+            printf("\n");
+
+            // Print counts   
+            for(unsigned k = 0; k < numThreads_; k++)
+                printf("Count: %14lld | ", records_[i][k][j]);
+            printf("\n");
+
+            // For multiple openmp threads print cumulative total
+            if(numThreads_>1){
+                long long total = 0;
+                for(unsigned k = 0; k < numThreads_; k++)
+                    total += records_[i][k][j];
+                printf("Accumulative total from %d threads: %lld\n", numThreads_, total);
+            }
+        }
+        // Print time
+        for(unsigned k = 0; k < numThreads_; k++)           
+            printf("------------------------");
+        printf("\n");
+        for(unsigned k = 0; k < numThreads_; k++)
+            printf("Time: %15f | ", records_[i].time()[k]);
+        printf("\n");    
+
+        // For multiple openmp threads print average time
+        if(numThreads_>1){
+            double total = 0;
+            for(unsigned k = 0; k < numThreads_; k++)
+                total += records_[i].time()[k];
+            printf("Average time from %d threads: %f\n", numThreads_, total/(double)numThreads_);
+        }   
+    }
+}
+
+void PapiWrapper::multiRunPrintAverageRecords()
+{
+    if(records_.size() == 0){
+        printf("multiRunPrintFastestRecords(): No records made \n");
+        fflush(0);
+    }
+    // Loop through each unique key, work out counts and totals as usual
+    // but then provide averaged count and store in order to easily print
+    // for excel
+    Array_T< double > keyTimes;
+    keyTimes.resize(uniqueKeys_.size());
+    keyTimes.fill(0.0);
+
+    Array_T< Array_T< long long > > keyEvents;
+    keyEvents.resize(uniqueKeys_.size());
+
+    for(unsigned i = 0; i < uniqueKeys_.size(); i++){
+        keyEvents[i].resize(numEvents_);
+        keyEvents[i].fill(0);
+    }
+    
+    for(unsigned i = 0; i < uniqueKeys_.size(); i++){
+
+        // Go through all records and extract times
+        for(unsigned j = 0; j < records_.size(); j++) {
+            // If record matches unique key
+            if(records_[j].rID() == uniqueKeys_[i]){
+                // Get its events
+                for(unsigned k = 0; k < numEvents_; k++){
+                    // Get cumulative total for all threads
+                    for(unsigned l = 0; l < numThreads_; l++)
+                         keyEvents[i][k] += records_[j][l][k];
+                }
+                for(unsigned k = 0; k < numThreads_; k++)
+                    keyTimes[i] += records_[i].time()[k];
             }
         }
 
-        if(!found){
-            printf("Record with key: %s not found in records list.\n", key.c_str());
-            fflush(0);
-        }
-    }
-}
+        // Average
+        int nRuns = (records_.size()/uniqueKeys_.size());
+        for(unsigned j = 0; j < numEvents_; j++)
+            keyEvents[i][j] /= nRuns;
 
+        printf("numThreads_ %d nRuns %d\n", numThreads_, nRuns);
+        keyTimes[i] /= (numThreads_ * nRuns);
+    }
+
+    // Print results
+    printf("-----------Events-----------\nTime\n");
+    for(unsigned i = 0; i < numEvents_; i++)
+        printf("%s\n",eventNames_[i]);
+    printf("\n");
+
+    printf("-----------Counts-----------\n");
+    for(unsigned i = 0; i < uniqueKeys_.size(); i++){
+            printf("%f\t",keyTimes[i]);
+    }
+    printf("\n");
+
+    for(unsigned i = 0; i < numEvents_; i++){
+        for(unsigned j = 0; j < uniqueKeys_.size(); j++){
+            printf("%lld\t",keyEvents[j][i]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+    fflush(0);
+}
 
 void PapiWrapper::papiPrintError(int err)
 {
@@ -302,14 +415,14 @@ void PapiWrapper::startCounters()
     #pragma omp parallel
     {
         if(numEvents_){
-            #ifdef _OPENMP
-                int tid = omp_get_thread_num();
-            #else
-                int tid = 0;
-            #endif
-            int papi_error = PAPI_start(eventSets_[tid]);
+                #ifdef _OPENMP
+                        int tid = omp_get_thread_num();
+                #else
+                        int tid = 0;
+                #endif
+            int papi_error = PAPI_start_counters(&eventIds_[0], eventIds_.size());
             if (papi_error != PAPI_OK){
-                printf("Thread %d: Could not start event set counters\n", tid);
+                printf("Thread %d: Could not start counters\n", tid);
                 if(verbose_debug_){
                     for(unsigned i = 0; i < eventIds_.size(); i++)
                         printf("EventID %d out of %d: 0x%X\n",i, eventIds_.size(), eventIds_[i]);
@@ -341,22 +454,14 @@ void PapiWrapper::stopCounters()
         int tid = 0;
 #endif
         if(numEvents_){
-            int papi_error = PAPI_stop(eventSets_[tid], &counters_[tid][0]);
+            int papi_error = PAPI_stop_counters(&counters_[tid][0], eventIds_.size());
             if (papi_error != PAPI_OK){
-                printf("Could not stop event set counters\n");
+                printf("Could not stop counters\n");
                 papiPrintError(papi_error);
                 exit(-1);
             }
-
-            // Reset counters to 0
-            papi_error = PAPI_reset(eventSets_[tid]);
-            if(papi_error != PAPI_OK){
-                printf("Count not reset event set counters\n");
-                papiPrintError(papi_error);
-            }
         }
     }
-
 
     counting_ = false;
 }

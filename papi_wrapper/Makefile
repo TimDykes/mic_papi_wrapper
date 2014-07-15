@@ -8,35 +8,55 @@ CXX = icpc
 # Target
 TARGET = mic_demo
 
-# Use openmp
-OMP = -fopenmp
-#OMP = 
-
 # General compiler flags
-OPTS = -Wall -O2 $(OMP)
+CPPFLAGS = -fopenmp -Wall -O2 -I. -L.  
 
-# Mic offload compiler flags
-MIC_OFFLOAD_OPTS = -offload-option,mic,compiler," $(OMP) -Wall -O2 -lpwp -L. -z defs"
+# Compiler flags for host offloading c++ files
+OFFLOAD_MIC_FLAGS = -offload-option,mic,compiler," -fopenmp -Wall -ansi-alias -O3 -I. -L. -z defs -ffreestanding -opt-streaming-stores always -opt-streaming-cache-evict=0 -mP2OPT_hlo_use_const_pref_dist=64 -mP2OPT_hlo_use_const_second_pref_dist=8 -wd3218" -wd3218
 
-# Mic native compiler flags
-MIC_NATIVE_OPTS = -mmic $(OMP) -fPIC -shared -lpapi -lpfm -L/users/dykest/Programs/papi
+# Compiler flags for native MIC c++ files
+NATIVE_MIC_FLAGS = -mmic -fopenmp -fPIC -shared -lpapi -lpfm -L/users/dykest/Programs/papi 
 
-# Objects to be built
-OBJS = main.o
-#$(patsubst %.cpp,%.o,$(wildcard *.cpp))
+# Additional libraries
+LIBS = 
+
+# Include directories for host build
+INC =
+
+# Include directories for native build
+NATIVE_INC = 
+
+# Use PAPI wrapper
+OPT = -DUSE_PAPI_WRAP
+
+ifeq (USE_PAPI_WRAP,$(findstring USE_PAPI_WRAP,$(OPT)))
+	INC += -I/users/dykest/Programs/papi
+	NATIVE_INC += -I/users/dykest/Programs/papi
+	OFFLOAD_MIC_FLAGS += -offload-option,mic,compiler,"-L. -lpwp " 
+endif
+
+# In order to use PAPI in offload, we build the papi_wrapper (which links to a MIC 
+# native version of PAPI) as a native library, and then link to it via the mic compiler 
+# options in CPPFLAGS
 
 # Rules
 all: $(TARGET)
 
-$(TARGET): $(OBJS) libpwp.so 
-	$(CXX) $(OPTS) $(MIC_OFFLOAD_OPTS) $(LIBS) $(OBJS) -o $(TARGET)
+$(TARGET): offload_stream.o 
+	$(CXX) $(CPPFLAGS) $(OFFLOAD_MIC_FLAGS) $(LIBS) offload_stream.o -o $(TARGET)
 
-%.o: %.cpp
-	$(CXX) -c $(OPTS) $(MIC_OFFLOAD_OPTS) -o "$@" "$<"
+offload_stream.o: offload_stream.cpp libpwp.so
+	$(CXX) -c offload_stream.cpp $(CPPFLAGS) $(INC) $(OPT) $(OFFLOAD_MIC_FLAGS) -o "$@" 
 
-libpwp.so: papi_wrapper.cpp
-	$(CXX) $(MIC_NATIVE_OPTS) -o libpwp.so papi_wrapper.cpp
+
+libpwp.so: papi_wrapper.cpp 
+	$(CXX) $(NATIVE_MIC_FLAGS) $(NATIVE_INC) -o "$@" "$<"
 
 clean: 
-	rm -f *.o *.so
+	rm -f *.o
+	rm -f $(TARGET)
+
+cleanlib:
+	rm -f *.o
+	rm -f *.so
 	rm -f $(TARGET)

@@ -12,91 +12,62 @@
 #include <string.h>
 #include <string>
 #include <sys/time.h>
-#include <omp.h>
-#include </users/dykest/Programs/papi/papi.h>
+#ifdef _OPENMP
+	#include <omp.h>
+#endif
+#include <papi.h>
 
-// TODO: mm_malloc to 64 instead of new
-template<typename T>
-class Array_T{
-public:
-	Array_T() { arr_ = NULL; size_ = 0; }
-	Array_T(int i) { arr_ = new T[i]; size_ = i; } 
-	~Array_T() { if(arr_ != NULL) delete[] arr_; }
-
-	T& operator[] (int loc) {
-		if(loc >= size_){
-			printf("Error: array element access out of range\n");
-			exit(1);
-		}
-		else
-			return arr_[loc];
-	};
-
-	void operator= (Array_T<T>& copyarr) {
-		if(size_ != copyarr.size())
-			resize(copyarr.size());
-		for(unsigned i = 0; i < size_; i++)
-			arr_[i] = copyarr[i];
-	}
-
-	void resize(int newSize) {
-		if(arr_ != NULL) {
-			T* temp = new T[newSize];
-			memcpy(temp, arr_, (newSize > size_ ? size_ : newSize)*sizeof(T) );
-			arr_ = temp;
-			size_ = newSize;
-		}
-		else {
-			arr_ = new T[newSize];
-			size_ = newSize;
-		}
-	}
-
-	void push_back(T& element) {
-		resize(size_+1);
-		arr_[size_-1] = element;
-	}
-
-	unsigned size() { return size_; }
-
-private:
-	T* arr_;
-	unsigned size_;
-};
+#include "array_t.h"
 
 class Record{
 public:
 	Record() {}
-	Record(std::string name, unsigned nThreads, unsigned nEvents, Array_T<double>& t)
+	void Init(unsigned rID, unsigned nThreads, unsigned nEvents)
 	{
-		name_ = name;
+		rID_ = rID;
 		recordedCounts_.resize(nThreads);
 		for(unsigned i = 0; i < nThreads; i++)
 			recordedCounts_[i].resize(nEvents);
-		time_ = t;
+		time_.resize(nThreads);
 	}
-	std::string name() { return name_; }
+	unsigned rID() const{ return rID_; }
 	Array_T<double>& time() { return time_; }
+	Array_T<double> const& time() const { return time_; }
+	Array_T< Array_T<long long> > const& recordedCounts_ref() const{ return recordedCounts_; }
 
 	Array_T< long long >& operator[] (unsigned loc) { return recordedCounts_[loc]; };
 
+	void operator= (Record const& input) {
+		rID_ = input.rID();
+		recordedCounts_ = input.recordedCounts_ref();
+		time_ = input.time();
+	}
+
+	void operator= (Record& input) {
+		rID_ = input.rID();
+		recordedCounts_ = input.recordedCounts_ref();
+		time_ = input.time();
+	}
+
 private:
-	std::string name_;
+	unsigned rID_;
 	Array_T< Array_T<long long> > recordedCounts_;
 	Array_T<double> time_;
 };
 
 class PapiWrapper{
 public:
-	PapiWrapper() { setup_ = false; numEvents_ = 0; numThreads_ = 1; debug_ = false; verbose_debug_ = false; counting_=false;}
+	PapiWrapper() { setup_ = false; numEvents_ = 0; numThreads_ = 1; debug_ = false; verbose_debug_ = false; counting_=false; timeOnly_ = false; currentRecord_ = -1;}
 	~PapiWrapper() {}
 
 	void init();
 	void setDebug(bool);
 	void setVerboseDebug(bool);
-	void startRecording(std::string);
+	void startRecording(unsigned);
 	void stopRecording();
-	void printRecord(std::string);
+	void printRecord(unsigned);
+	void printAllRecords();
+	void multiRunPrintAverageRecords();
 
 private:
 	void startCounters();
@@ -105,17 +76,20 @@ private:
 
 	Array_T<Record> records_;
 	Array_T<double> times_;
-	Array_T<std::string> eventNames_;
+	Array_T<char*> eventNames_;
 	Array_T<int> eventIds_;
-	Array_T<int> eventSets_;
 	Array_T< Array_T<long long> > counters_;
-	Record* currentRecord_;
+    Array_T<double> sTime_;
+    Array_T<unsigned> uniqueKeys_;
+	int currentRecord_;
 	bool setup_;
 	bool debug_;
 	bool verbose_debug_;
 	bool counting_;
+	bool timeOnly_;
 	int numThreads_;
 	int numEvents_;
+    int eventSet_;
 };
 
 #endif
