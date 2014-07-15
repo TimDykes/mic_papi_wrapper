@@ -15,7 +15,7 @@ CPPFLAGS = -fopenmp -Wall -O2 -I. -L.
 OFFLOAD_MIC_FLAGS = -offload-option,mic,compiler," -fopenmp -Wall -ansi-alias -O3 -I. -L. -z defs -ffreestanding -opt-streaming-stores always -opt-streaming-cache-evict=0 -mP2OPT_hlo_use_const_pref_dist=64 -mP2OPT_hlo_use_const_second_pref_dist=8 -wd3218" -wd3218
 
 # Compiler flags for native MIC c++ files
-NATIVE_MIC_FLAGS = -mmic -fopenmp -fPIC -shared -lpapi -lpfm -L/users/dykest/Programs/papi 
+NATIVE_MIC_FLAGS = -mmic -fopenmp -fPIC -shared
 
 # Additional libraries
 LIBS = 
@@ -30,8 +30,10 @@ NATIVE_INC =
 OPT = -DUSE_PAPI_WRAP
 
 ifeq (USE_PAPI_WRAP,$(findstring USE_PAPI_WRAP,$(OPT)))
-	INC += -I/users/dykest/Programs/papi
-	NATIVE_INC += -I/users/dykest/Programs/papi
+	PAPI_PATH = /users/dykest/Programs/papi 
+	NATIVE_MIC_FLAGS +=  -lpapi -lpfm -L$(PAPI_PATH)
+	INC += -I$(PAPI_PATH)
+	NATIVE_INC += -I$(PAPI_PATH)
 	OFFLOAD_MIC_FLAGS += -offload-option,mic,compiler,"-L. -lpwp " 
 endif
 
