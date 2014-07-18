@@ -4,10 +4,13 @@ The wrapper is built natively for the MIC, then linked to only for the MIC objec
 
 First modify the Makefile for your system, particularly to insert path to the papi install directory. Then modify prepenv.sh to insert the path to the papi lib, and modify thread settings if you want.
 
-For running:
+To run:
 
-source prepenv.sh source preppapi.sh ./mic_demo
+source prepenv.sh 
+source preppapi.sh 
+./mic_demo
 
 The first script sets the LD_LIBRARY_PATH and some thread settings. The second sets which events to measure. Currrently set to VPU_INSTRUCTIONS_EXECUTED and VPU_ELEMENTS_ACTIVE, which when dividing the former by the latter provides the Vectorization Intensity (i.e. how many elements of the vector registers were active on average per instruction, 8 is target for double precision, and 16 for single).
 
 The file runscript.sh provides a script to run a set of times collecting a different event/eventset each time, there are two hw counters per hw thread context (for most events), although you some events are limited to one particular counter and so you cannot collect two such events at once.
+
