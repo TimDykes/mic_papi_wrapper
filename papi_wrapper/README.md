@@ -1,4 +1,4 @@
-This wrapper allows to use PAPI in offload mode on Intel Xeon Phi, with a demo usage in an offloaded implementation of the STREAM benchmark. The wrapper uses code from Ben Cummings papi-wrap: https://github.com/bcumming/papi-wrap
+This wrapper allows to use PAPI in offload mode on Intel Xeon Phi, with a demo usage in an offloaded implementation of the STREAM benchmark (http://www.cs.virginia.edu/stream/). The wrapper uses code from Ben Cummings papi-wrap: https://github.com/bcumming/papi-wrap
 
 The wrapper is built natively for the MIC, then linked to only for the MIC objects when compiling mic/host code. The limitation with this is that you can only use the wrapper within __MIC__ preprocessor definition checks. There also appears to be some side effect of this that causes linker problems with STL containers (string/vector etc) hence use of a custom templated array class until I figure out the issue.
 
